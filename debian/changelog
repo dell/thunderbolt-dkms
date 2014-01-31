@@ -1,0 +1,5 @@
+thunderbolt-icm-dkms (0.1) xenial; urgency=low
+
+  * Initial release.
+
+ -- Mario Limonciello <mario.limonciello@dell.com>  Thu, 15 Dec 2016 17:21:01 -0600
