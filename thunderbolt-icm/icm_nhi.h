@@ -18,7 +18,8 @@
 #define ICM_NHI_H_
 
 #include <linux/pci.h>
-#include "../nhi_regs.h"
+#include "nhi_regs.h"
+#include "fake_ids.h"
 
 #define DRV_VERSION "16.1.55.1"
 
