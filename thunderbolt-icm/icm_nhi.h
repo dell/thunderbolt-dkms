@@ -21,7 +21,7 @@
 #include "nhi_regs.h"
 #include "fake_ids.h"
 
-#define DRV_VERSION "16.1.55.1"
+#define DRV_VERSION "16.1.56.1"
 
 #define PCI_DEVICE_ID_INTEL_WIN_RIDGE_2C_NHI		0x157d /*Tbt 2 Low Pwr*/
 #define PCI_DEVICE_ID_INTEL_WIN_RIDGE_2C_BRIDGE		0x157e
