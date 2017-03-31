@@ -13,7 +13,8 @@
  * more details.
  *
  ******************************************************************************/
-
+#include <linux/version.h>
+#include <linux/moduleparam.h>
 #include <linux/etherdevice.h>
 #include <linux/crc32.h>
 #include <linux/prefetch.h>
@@ -1576,9 +1577,15 @@ static void tbt_net_set_rx_mode(struct net_device *net_dev)
 
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
+static void tbt_net_get_stats64(
+				struct net_device *net_dev,
+				struct rtnl_link_stats64 *stats)
+#else
 static struct rtnl_link_stats64 *tbt_net_get_stats64(
 					struct net_device *net_dev,
 					struct rtnl_link_stats64 *stats)
+#endif
 {
 	struct tbt_port *port = netdev_priv(net_dev);
 
@@ -1595,7 +1602,9 @@ static struct rtnl_link_stats64 *tbt_net_get_stats64(
 	stats->rx_errors = stats->rx_length_errors + stats->rx_over_errors +
 			   stats->rx_crc_errors + stats->rx_missed_errors;
 	stats->multicast = port->stats.multicast;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
 	return stats;
+#endif
 }
 
 static int tbt_net_set_mac_address(struct net_device *net_dev, void *addr)

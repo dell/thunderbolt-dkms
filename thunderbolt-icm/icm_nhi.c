@@ -14,6 +14,10 @@
  *
  ******************************************************************************/
 
+#include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
+#include <linux/module.h>
+#endif
 #include <linux/printk.h>
 #include <linux/crc32.h>
 #include <linux/delay.h>
