@@ -1,6 +1,6 @@
 /*******************************************************************************
  *
- * Intel Thunderbolt(TM) driver
+ * Thunderbolt(TM) driver
  * Copyright(c) 2014 - 2016 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -121,7 +121,6 @@ struct approve_inter_domain_connection_cmd {
 	__be16 receive_ring_number;
 	__be16 receive_path;
 	__be32 crc;
-
 };
 
 struct tbt_frame_header {
@@ -475,8 +474,9 @@ static inline bool tbt_net_alloc_mapped_page(struct device *dev,
 		if (unlikely(!buf->page))
 			return false;
 
-		buf->dma = dma_map_page(dev, buf->page, 0, PAGE_SIZE,
-					DMA_FROM_DEVICE);
+		buf->dma = dma_map_page_attrs(dev, buf->page, 0, PAGE_SIZE,
+					      DMA_FROM_DEVICE,
+					      DMA_ATTR_SKIP_CPU_SYNC);
 		if (dma_mapping_error(dev, buf->dma)) {
 			__free_page(buf->page);
 			buf->page = NULL;
@@ -502,14 +502,18 @@ static bool tbt_net_alloc_rx_buffers(struct device *dev,
 		/* making sure next_to_clean won't get old buffer */
 		desc->attributes = cpu_to_le32(DESC_ATTR_REQ_STS |
 					       DESC_ATTR_INT_EN);
-		if (tbt_net_alloc_mapped_page(dev, buf, gfp)) {
-			res = true;
-			rx_ring->last_allocated = i;
-			i = (i + 1) & (TBT_NET_NUM_RX_BUFS - 1);
-			desc->phys = cpu_to_le64(buf->dma + buf->page_offset);
-		} else {
+		if (!tbt_net_alloc_mapped_page(dev, buf, gfp))
 			break;
-		}
+
+		/* sync the buffer for use by the device */
+		dma_sync_single_range_for_device(dev, buf->dma,
+						 buf->page_offset,
+						 TBT_RING_MAX_FRAME_SIZE,
+						 DMA_FROM_DEVICE);
+		res = true;
+		rx_ring->last_allocated = i;
+		i = (i + 1) & (TBT_NET_NUM_RX_BUFS - 1);
+		desc->phys = cpu_to_le64(buf->dma + buf->page_offset);
 	}
 
 	if (res) {
@@ -796,20 +800,20 @@ loop:
 			 * memory so let's reuse.
 			 * If not local, let's free it and reallocate later.
 			 */
-			if (likely(page_to_nid(buf->page) == numa_node_id()))
-				/* sync the buffer for use by the device */
-				dma_sync_single_range_for_device(
-						&port->nhi_ctxt->pdev->dev,
-						buf->dma, buf->page_offset,
-						TBT_RING_MAX_FRAME_SIZE,
-						DMA_FROM_DEVICE);
-			else {
-				/* this page cannot be reused so discard it */
+			if (unlikely(page_to_nid(buf->page) !=
+				     numa_node_id())) {
+				/*
+				 * We are not reusing the buffer so unmap it and
+				 * free any references we are holding to it.
+				 */
+				dma_unmap_page_attrs(&port->nhi_ctxt->pdev->dev,
+						     buf->dma,
+						     PAGE_SIZE,
+						     DMA_FROM_DEVICE,
+						     DMA_ATTR_SKIP_CPU_SYNC);
+
 				put_page(buf->page);
 				buf->page = NULL;
-				dma_unmap_page(&port->nhi_ctxt->pdev->dev,
-					       buf->dma, PAGE_SIZE,
-					       DMA_FROM_DEVICE);
 			}
 			rx_ring->next_to_clean = (rx_ring->next_to_clean + 1) &
 						 (TBT_NET_NUM_RX_BUFS - 1);
@@ -862,10 +866,11 @@ loop:
 #endif
 				{
 					buf->page = NULL;
-					dma_unmap_page(
+					dma_unmap_page_attrs(
 						&port->nhi_ctxt->pdev->dev,
 						buf->dma, PAGE_SIZE,
-						DMA_FROM_DEVICE);
+						DMA_FROM_DEVICE,
+						DMA_ATTR_SKIP_CPU_SYNC);
 				}
 
 				rx_ring->next_to_clean =
@@ -884,7 +889,7 @@ loop:
 		 * minimum frame size, thus doesn't need any padding in
 		 * transmit.
 		 * The network stack accepts Runt Ethernet frames,
-		 * therefor there is neither padding in receive.
+		 * therefore there is neither padding in receive.
 		 */
 
 		skb->protocol = eth_type_trans(skb, port->net_dev);
@@ -910,7 +915,7 @@ out:
 		return budget;
 
 	/* Work is done so exit the polling mode and re-enable the interrupt */
-	napi_complete(napi);
+	napi_complete_done(napi, rx_packets);
 
 	spin_lock_irqsave(&port->nhi_ctxt->lock, flags);
 	/* enable RX interrupt */
@@ -919,7 +924,7 @@ out:
 
 	spin_unlock_irqrestore(&port->nhi_ctxt->lock, flags);
 
-	return 0;
+	return rx_packets;
 }
 
 static int tbt_net_open(struct net_device *net_dev)
@@ -1178,14 +1183,33 @@ static int tbt_net_close(struct net_device *net_dev)
 		port->tx_ring.buffers[i].hdr = NULL;
 	}
 	/* Unmap the Rx buffers that were allocated */
-	for (i = 0; i < TBT_NET_NUM_RX_BUFS; i++)
-		if (port->rx_ring.buffers[i].page) {
-			put_page(port->rx_ring.buffers[i].page);
-			port->rx_ring.buffers[i].page = NULL;
-			dma_unmap_page(&port->nhi_ctxt->pdev->dev,
-				       port->rx_ring.buffers[i].dma, PAGE_SIZE,
-				       DMA_FROM_DEVICE);
-		}
+	for (i = 0; i < TBT_NET_NUM_RX_BUFS; i++) {
+		struct tbt_buffer *buf = &port->rx_ring.buffers[i];
+
+		if (!buf->page)
+			continue;
+
+		/*
+		 * Invalidate cache lines that may have been written to by
+		 * device so that we avoid corrupting memory.
+		 */
+		dma_sync_single_range_for_cpu(&port->nhi_ctxt->pdev->dev,
+					      buf->dma,
+					      buf->page_offset,
+					      TBT_RING_MAX_FRAME_SIZE,
+					      DMA_FROM_DEVICE);
+
+		/* free resources associated with mapping */
+		dma_unmap_page_attrs(&port->nhi_ctxt->pdev->dev,
+				     buf->dma,
+				     PAGE_SIZE,
+				     DMA_FROM_DEVICE,
+				     DMA_ATTR_SKIP_CPU_SYNC);
+
+		put_page(buf->page);
+
+		buf->page = NULL;
+	}
 
 	/*
 	 * For central allocation, free all
@@ -1217,6 +1241,9 @@ static int tbt_net_close(struct net_device *net_dev)
 	vfree(port->rx_ring.buffers);
 	port->rx_ring.buffers = NULL;
 
+	if (!port->nhi_ctxt->msix_entries)
+		goto out;
+
 	devm_free_irq(&port->nhi_ctxt->pdev->dev,
 		      port->nhi_ctxt->msix_entries[3 + (port->num * 2)].vector,
 		      port);
@@ -1224,6 +1251,7 @@ static int tbt_net_close(struct net_device *net_dev)
 		      port->nhi_ctxt->msix_entries[2 + (port->num * 2)].vector,
 		      port);
 
+out:
 	netif_info(port, ifdown, net_dev, "Thunderbolt(TM) Networking port %u - is down\n",
 		   port->num);
 
@@ -1582,22 +1610,6 @@ static int tbt_net_set_mac_address(struct net_device *net_dev, void *addr)
 	return 0;
 }
 
-static int tbt_net_change_mtu(struct net_device *net_dev, int new_mtu)
-{
-	struct tbt_port *port = netdev_priv(net_dev);
-
-	/* MTU < 68 is an error and causes problems on some kernels */
-	if (new_mtu < 68 || new_mtu > (TBT_NET_MTU - ETH_HLEN))
-		return -EINVAL;
-
-	netif_info(port, probe, net_dev, "Thunderbolt(TM) Networking port %u - changing MTU from %u to %d\n",
-		   port->num, net_dev->mtu, new_mtu);
-
-	net_dev->mtu = new_mtu;
-
-	return 0;
-}
-
 static const struct net_device_ops tbt_netdev_ops = {
 	/* called when the network is up'ed */
 	.ndo_open		= tbt_net_open,
@@ -1607,7 +1619,6 @@ static const struct net_device_ops tbt_netdev_ops = {
 	.ndo_set_rx_mode	= tbt_net_set_rx_mode,
 	.ndo_get_stats64	= tbt_net_get_stats64,
 	.ndo_set_mac_address	= tbt_net_set_mac_address,
-	.ndo_change_mtu		= tbt_net_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
 };
 
@@ -2235,7 +2246,9 @@ struct net_device *nhi_alloc_etherdev(struct tbt_nhi_ctxt *nhi_ctxt,
 
 	net_dev->ethtool_ops = &tbt_net_ethtool_ops;
 
-	tbt_net_change_mtu(net_dev, TBT_NET_MTU - ETH_HLEN);
+	/* MTU range: 68 - 65522 */
+	net_dev->min_mtu = ETH_MIN_MTU;
+	net_dev->max_mtu = TBT_NET_MTU - ETH_HLEN;
 
 	if (register_netdev(net_dev))
 		goto err_register;

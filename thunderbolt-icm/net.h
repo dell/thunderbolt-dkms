@@ -1,6 +1,6 @@
 /*******************************************************************************
  *
- * Intel Thunderbolt(TM) driver
+ * Thunderbolt(TM) driver
  * Copyright(c) 2014 - 2016 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -36,10 +36,12 @@
  * Calculate host physical port number (Zero-based numbering) from
  * host channel/link which starts from 1.
  */
-#define PORT_NUM_FROM_LINK(link) (((link) - 1) / CHANNELS_PER_PORT_NUM)
-#define PORT_NUM_FROM_MSG(msg) PORT_NUM_FROM_LINK(((msg) & \
-			       INTER_DOMAIN_LINK_MASK) >> \
-			       INTER_DOMAIN_LINK_SHIFT)
+#define PORT_NUM_FROM_LINK(link)	(((link) - 1) / CHANNELS_PER_PORT_NUM)
+#define INTER_DOMAIN_LINK_SHIFT		0
+#define INTER_DOMAIN_LINK_MASK		GENMASK(2, INTER_DOMAIN_LINK_SHIFT)
+#define PORT_NUM_FROM_MSG(msg)		PORT_NUM_FROM_LINK(((msg) & \
+						INTER_DOMAIN_LINK_MASK) >> \
+						INTER_DOMAIN_LINK_SHIFT)
 
 #define TBT_TX_RING_FULL(prod, cons, size) ((((prod) + 1) % (size)) == (cons))
 #define TBT_TX_RING_EMPTY(prod, cons) ((prod) == (cons))
