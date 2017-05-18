@@ -6,7 +6,7 @@
 
 DEB_NAME=thunderbolt-icm
 NAME=thunderbolt-icm
-VERSION=0.1
+VERSION=0.2
 
 configure: configure-stamp
 configure-stamp:
