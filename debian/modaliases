@@ -1,3 +1,4 @@
-alias wmi:A90597CE-A997-11DA-B012-B622A1EF5492 hwe thunderbolt-dkms
-alias wmi:A80593CE-A997-11DA-B012-B622A1EF5492 hwe thunderbolt-dkms
-alias wmi:A70591CE-A997-11DA-B012-B622A1EF5492 hwe thunderbolt-dkms
+alias pci:v00008086d0000156Csv*sd*bc08sc80i00* hwe thunderbolt-dkms
+alias pci:v00008086d0000156Asv*sd*bc08sc80i00* hwe thunderbolt-dkms
+alias pci:v00008086d00001547sv00002222sd00001111bc08sc80i00* hwe thunderbolt-dkms
+alias pci:v00008086d00001513sv00002222sd00001111bc08sc80i00* hwe thunderbolt-dkms
