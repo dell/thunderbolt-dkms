@@ -231,84 +231,6 @@ static int nvm_authenticate_device(struct tb_switch *sw)
 	return -ETIMEDOUT;
 }
 
-static ssize_t nvm_authenticate_show(struct device *dev,
-	struct device_attribute *attr, char *buf)
-{
-	struct tb_switch *sw = tb_to_switch(dev);
-	u32 status;
-
-	nvm_get_auth_status(sw, &status);
-	return sprintf(buf, "%#x\n", status);
-}
-
-static ssize_t nvm_authenticate_store(struct device *dev,
-	struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct tb_switch *sw = tb_to_switch(dev);
-	unsigned int val;
-	int ret;
-
-	if (mutex_lock_interruptible(&switch_lock))
-		return -ERESTARTSYS;
-
-	ret = kstrtouint(buf, 0, &val);
-	if (ret)
-		goto unlock;
-
-	switch (val) {
-	case 0:
-		/* Just clear the authentication status */
-		nvm_clear_auth_status(sw);
-		break;
-
-	case 1:
-		ret = nvm_validate_and_write(sw);
-		if (ret)
-			goto unlock;
-
-		sw->nvm->authenticating = true;
-
-		if (!tb_route(sw))
-			ret = nvm_authenticate_host(sw);
-		else
-			ret = nvm_authenticate_device(sw);
-		break;
-
-	default:
-		ret = -EINVAL;
-		break;
-	}
-
-unlock:
-	mutex_unlock(&switch_lock);
-
-	if (ret)
-		return ret;
-	return count;
-}
-static DEVICE_ATTR_RW(nvm_authenticate);
-
-static ssize_t nvm_version_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	struct tb_switch *sw = tb_to_switch(dev);
-
-	if (sw->safe_mode)
-		return -ENODATA;
-	return sprintf(buf, "%x.%x\n", sw->nvm->major, sw->nvm->minor);
-}
-static DEVICE_ATTR_RO(nvm_version);
-
-static struct attribute *nvm_attrs[] = {
-	&dev_attr_nvm_authenticate.attr,
-	&dev_attr_nvm_version.attr,
-	NULL,
-};
-
-static struct attribute_group nvm_group = {
-	.attrs = nvm_attrs,
-};
-
 static int tb_switch_nvm_read(void *priv, unsigned int offset, void *val,
 			      size_t bytes)
 {
@@ -414,8 +336,8 @@ static int tb_switch_nvm_add(struct tb_switch *sw)
 		if (ret)
 			goto err_ida;
 
-		nvm->major = val >> 16 & 0xff;
-		nvm->minor = val >> 8 & 0xff;
+		nvm->major = val >> 16;
+		nvm->minor = val >> 8;
 
 		nvm_dev = register_nvmem(sw, nvm->id, nvm_size, true);
 		if (IS_ERR(nvm_dev)) {
@@ -432,18 +354,12 @@ static int tb_switch_nvm_add(struct tb_switch *sw)
 	}
 	nvm->non_active = nvm_dev;
 
+	mutex_lock(&switch_lock);
 	sw->nvm = nvm;
-
-	ret = sysfs_create_group(&sw->dev.kobj, &nvm_group);
-	if (ret) {
-		sw->nvm = NULL;
-		goto err_nvm_nonactive;
-	}
+	mutex_unlock(&switch_lock);
 
 	return 0;
 
-err_nvm_nonactive:
-	nvmem_unregister(nvm->non_active);
 err_nvm_active:
 	if (nvm->active)
 		nvmem_unregister(nvm->active);
@@ -456,21 +372,26 @@ err_ida:
 
 static void tb_switch_nvm_remove(struct tb_switch *sw)
 {
-	if (!sw->nvm)
+	struct tb_switch_nvm *nvm;
+
+	mutex_lock(&switch_lock);
+	nvm = sw->nvm;
+	sw->nvm = NULL;
+	mutex_unlock(&switch_lock);
+
+	if (!nvm)
 		return;
 
 	/* Remove authentication status in case the switch is unplugged */
-	if (!sw->nvm->authenticating)
+	if (!nvm->authenticating)
 		nvm_clear_auth_status(sw);
 
-	sysfs_remove_group(&sw->dev.kobj, &nvm_group);
-	nvmem_unregister(sw->nvm->non_active);
-	if (sw->nvm->active)
-		nvmem_unregister(sw->nvm->active);
-	ida_simple_remove(&nvm_ida, sw->nvm->id);
-	vfree(sw->nvm->buf);
-	kfree(sw->nvm);
-	sw->nvm = NULL;
+	nvmem_unregister(nvm->non_active);
+	if (nvm->active)
+		nvmem_unregister(nvm->active);
+	ida_simple_remove(&nvm_ida, nvm->id);
+	vfree(nvm->buf);
+	kfree(nvm);
 }
 
 /* port utility functions */
@@ -812,8 +733,11 @@ static int tb_switch_set_authorized(struct tb_switch *sw, unsigned int val)
 		break;
 	}
 
-	if (!ret)
+	if (!ret) {
 		sw->authorized = val;
+		/* Notify status change to the userspace */
+		kobject_uevent(&sw->dev.kobj, KOBJ_CHANGE);
+	}
 
 unlock:
 	mutex_unlock(&switch_lock);
@@ -857,44 +781,6 @@ device_name_show(struct device *dev, struct device_attribute *attr, char *buf)
 	return sprintf(buf, "%s\n", sw->device_name ? sw->device_name : "");
 }
 static DEVICE_ATTR_RO(device_name);
-
-static ssize_t vendor_show(struct device *dev, struct device_attribute *attr,
-			   char *buf)
-{
-	struct tb_switch *sw = tb_to_switch(dev);
-
-	return sprintf(buf, "%#x\n", sw->vendor);
-}
-static DEVICE_ATTR_RO(vendor);
-
-static ssize_t
-vendor_name_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct tb_switch *sw = tb_to_switch(dev);
-
-	return sprintf(buf, "%s\n", sw->vendor_name ? sw->vendor_name : "");
-}
-static DEVICE_ATTR_RO(vendor_name);
-
-static ssize_t unique_id_show(struct device *dev, struct device_attribute *attr,
-			      char *buf)
-{
-	struct tb_switch *sw = tb_to_switch(dev);
-
-	return sprintf(buf, "%pUb\n", sw->uuid);
-}
-static DEVICE_ATTR_RO(unique_id);
-
-static struct attribute *switch_attrs[] = {
-	&dev_attr_authorized.attr,
-	&dev_attr_device.attr,
-	&dev_attr_device_name.attr,
-	&dev_attr_vendor.attr,
-	&dev_attr_vendor_name.attr,
-	&dev_attr_unique_id.attr,
-	NULL,
-};
-ATTRIBUTE_GROUPS(switch);
 
 static ssize_t key_show(struct device *dev, struct device_attribute *attr,
 			char *buf)
@@ -944,17 +830,154 @@ static ssize_t key_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RW(key);
 
-static struct attribute *secure_switch_attrs[] = {
+static ssize_t nvm_authenticate_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct tb_switch *sw = tb_to_switch(dev);
+	u32 status;
+
+	nvm_get_auth_status(sw, &status);
+	return sprintf(buf, "%#x\n", status);
+}
+
+static ssize_t nvm_authenticate_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct tb_switch *sw = tb_to_switch(dev);
+	bool val;
+	int ret;
+
+	if (mutex_lock_interruptible(&switch_lock))
+		return -ERESTARTSYS;
+
+	/* If NVMem devices are not yet added */
+	if (!sw->nvm) {
+		ret = -EAGAIN;
+		goto exit_unlock;
+	}
+
+	ret = kstrtobool(buf, &val);
+	if (ret)
+		goto exit_unlock;
+
+	/* Always clear the authentication status */
+	nvm_clear_auth_status(sw);
+
+	if (val) {
+		ret = nvm_validate_and_write(sw);
+		if (ret)
+			goto exit_unlock;
+
+		sw->nvm->authenticating = true;
+
+		if (!tb_route(sw))
+			ret = nvm_authenticate_host(sw);
+		else
+			ret = nvm_authenticate_device(sw);
+	}
+
+exit_unlock:
+	mutex_unlock(&switch_lock);
+
+	if (ret)
+		return ret;
+	return count;
+}
+static DEVICE_ATTR_RW(nvm_authenticate);
+
+static ssize_t nvm_version_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct tb_switch *sw = tb_to_switch(dev);
+	int ret;
+
+	if (mutex_lock_interruptible(&switch_lock))
+		return -ERESTARTSYS;
+
+	if (sw->safe_mode)
+		ret = -ENODATA;
+	else if (!sw->nvm)
+		ret = -EAGAIN;
+	else
+		ret = sprintf(buf, "%x.%x\n", sw->nvm->major, sw->nvm->minor);
+
+	mutex_unlock(&switch_lock);
+
+	return ret;
+}
+static DEVICE_ATTR_RO(nvm_version);
+
+static ssize_t vendor_show(struct device *dev, struct device_attribute *attr,
+			   char *buf)
+{
+	struct tb_switch *sw = tb_to_switch(dev);
+
+	return sprintf(buf, "%#x\n", sw->vendor);
+}
+static DEVICE_ATTR_RO(vendor);
+
+static ssize_t
+vendor_name_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct tb_switch *sw = tb_to_switch(dev);
+
+	return sprintf(buf, "%s\n", sw->vendor_name ? sw->vendor_name : "");
+}
+static DEVICE_ATTR_RO(vendor_name);
+
+static ssize_t unique_id_show(struct device *dev, struct device_attribute *attr,
+			      char *buf)
+{
+	struct tb_switch *sw = tb_to_switch(dev);
+
+	return sprintf(buf, "%pUb\n", sw->uuid);
+}
+static DEVICE_ATTR_RO(unique_id);
+
+static struct attribute *switch_attrs[] = {
 	&dev_attr_authorized.attr,
 	&dev_attr_device.attr,
 	&dev_attr_device_name.attr,
 	&dev_attr_key.attr,
+	&dev_attr_nvm_authenticate.attr,
+	&dev_attr_nvm_version.attr,
 	&dev_attr_vendor.attr,
 	&dev_attr_vendor_name.attr,
 	&dev_attr_unique_id.attr,
 	NULL,
 };
-ATTRIBUTE_GROUPS(secure_switch);
+
+static umode_t switch_attr_is_visible(struct kobject *kobj,
+				      struct attribute *attr, int n)
+{
+	struct device *dev = container_of(kobj, struct device, kobj);
+	struct tb_switch *sw = tb_to_switch(dev);
+
+	if (attr == &dev_attr_key.attr) {
+		if (tb_route(sw) &&
+		    sw->tb->security_level == TB_SECURITY_SECURE &&
+		    sw->security_level == TB_SECURITY_SECURE)
+			return attr->mode;
+		return 0;
+	} else if (attr == &dev_attr_nvm_authenticate.attr ||
+		   attr == &dev_attr_nvm_version.attr) {
+		if (sw->dma_port)
+			return attr->mode;
+		return 0;
+	}
+
+	return sw->safe_mode ? 0 : attr->mode;
+}
+
+static struct attribute_group switch_group = {
+	.is_visible = switch_attr_is_visible,
+	.attrs = switch_attrs,
+};
+
+static const struct attribute_group *switch_groups[] = {
+	&switch_group,
+	NULL,
+};
 
 static void tb_switch_release(struct device *dev)
 {
@@ -976,25 +999,39 @@ struct device_type tb_switch_type = {
 	.release = tb_switch_release,
 };
 
-static void tb_switch_set_generation(struct tb_switch *sw)
+static int tb_switch_get_generation(struct tb_switch *sw)
 {
 	switch (sw->config.device_id) {
+	case PCI_DEVICE_ID_INTEL_LIGHT_RIDGE:
+	case PCI_DEVICE_ID_INTEL_EAGLE_RIDGE:
+	case PCI_DEVICE_ID_INTEL_LIGHT_PEAK:
+	case PCI_DEVICE_ID_INTEL_CACTUS_RIDGE_2C:
+	case PCI_DEVICE_ID_INTEL_CACTUS_RIDGE_4C:
+	case PCI_DEVICE_ID_INTEL_PORT_RIDGE:
+	case PCI_DEVICE_ID_INTEL_REDWOOD_RIDGE_2C_BRIDGE:
+	case PCI_DEVICE_ID_INTEL_REDWOOD_RIDGE_4C_BRIDGE:
+		return 1;
+
+	case PCI_DEVICE_ID_INTEL_WIN_RIDGE_2C_BRIDGE:
+	case PCI_DEVICE_ID_INTEL_FALCON_RIDGE_2C_BRIDGE:
+	case PCI_DEVICE_ID_INTEL_FALCON_RIDGE_4C_BRIDGE:
+		return 2;
+
 	case PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_LP_BRIDGE:
 	case PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_2C_BRIDGE:
 	case PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_4C_BRIDGE:
 	case PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_C_2C_BRIDGE:
 	case PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_C_4C_BRIDGE:
-		sw->generation = 3;
-		break;
-
-	case PCI_DEVICE_ID_INTEL_FALCON_RIDGE_2C_BRIDGE:
-	case PCI_DEVICE_ID_INTEL_FALCON_RIDGE_4C_BRIDGE:
-		sw->generation = 2;
-		break;
+		return 3;
 
 	default:
-		sw->generation = 1;
-		break;
+		/*
+		 * For unknown switches assume generation to be 1 to be
+		 * on the safe side.
+		 */
+		tb_sw_warn(sw, "unsupported switch device id %#x\n",
+			   sw->config.device_id);
+		return 1;
 	}
 }
 
@@ -1027,7 +1064,7 @@ struct tb_switch *tb_switch_alloc(struct tb *tb, struct device *parent,
 
 	sw->tb = tb;
 	if (tb_cfg_read(tb->ctl, &sw->config, route, 0, TB_CFG_SWITCH, 0, 5))
-		goto err;
+		goto err_free_sw_ports;
 
 	tb_info(tb, "current switch config:\n");
 	tb_dump_switch(tb, &sw->config);
@@ -1043,7 +1080,7 @@ struct tb_switch *tb_switch_alloc(struct tb *tb, struct device *parent,
 	sw->ports = kcalloc(sw->config.max_port_number + 1, sizeof(*sw->ports),
 				GFP_KERNEL);
 	if (!sw->ports)
-		goto err;
+		goto err_free_sw_ports;
 
 	for (i = 0; i <= sw->config.max_port_number; i++) {
 		/* minimum setup for tb_find_cap and tb_drom_read to work */
@@ -1051,14 +1088,14 @@ struct tb_switch *tb_switch_alloc(struct tb *tb, struct device *parent,
 		sw->ports[i].port = i;
 	}
 
-	cap = tb_switch_find_vsec_cap(sw, TB_VSEC_CAP_PLUG_EVENTS);
+	sw->generation = tb_switch_get_generation(sw);
+
+	cap = tb_switch_find_vse_cap(sw, TB_VSE_CAP_PLUG_EVENTS);
 	if (cap < 0) {
-		tb_sw_warn(sw, "cannot find TB_VSEC_CAP_PLUG_EVENTS aborting\n");
-		goto err;
+		tb_sw_warn(sw, "cannot find TB_VSE_CAP_PLUG_EVENTS aborting\n");
+		goto err_free_sw_ports;
 	}
 	sw->cap_plug_events = cap;
-
-	tb_switch_set_generation(sw);
 
 	/* Root switch is always authorized */
 	if (!route)
@@ -1068,12 +1105,15 @@ struct tb_switch *tb_switch_alloc(struct tb *tb, struct device *parent,
 	sw->dev.parent = parent;
 	sw->dev.bus = &tb_bus_type;
 	sw->dev.type = &tb_switch_type;
+	sw->dev.groups = switch_groups;
 	dev_set_name(&sw->dev, "%u-%llx", tb->index, tb_route(sw));
 
 	return sw;
-err:
+
+err_free_sw_ports:
 	kfree(sw->ports);
 	kfree(sw);
+
 	return NULL;
 }
 
@@ -1110,6 +1150,7 @@ tb_switch_alloc_safe_mode(struct tb *tb, struct device *parent, u64 route)
 	sw->dev.parent = parent;
 	sw->dev.bus = &tb_bus_type;
 	sw->dev.type = &tb_switch_type;
+	sw->dev.groups = switch_groups;
 	dev_set_name(&sw->dev, "%u-%llx", tb->index, tb_route(sw));
 
 	return sw;
@@ -1140,27 +1181,10 @@ int tb_switch_configure(struct tb_switch *sw)
 		tb_sw_warn(sw, "unknown switch vendor id %#x\n",
 			   sw->config.vendor_id);
 
-	switch (sw->config.device_id) {
-	case PCI_DEVICE_ID_INTEL_LIGHT_RIDGE:
-	case PCI_DEVICE_ID_INTEL_CACTUS_RIDGE_4C:
-	case PCI_DEVICE_ID_INTEL_PORT_RIDGE:
-	case PCI_DEVICE_ID_INTEL_FALCON_RIDGE_2C_BRIDGE:
-	case PCI_DEVICE_ID_INTEL_FALCON_RIDGE_4C_BRIDGE:
-	case PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_2C_BRIDGE:
-	case PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_4C_BRIDGE:
-	case PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_C_2C_BRIDGE:
-	case PCI_DEVICE_ID_INTEL_ALPINE_RIDGE_C_4C_BRIDGE:
-		break;
-
-	default:
-		tb_sw_warn(sw, "unsupported switch device id %#x\n",
-			   sw->config.device_id);
-	}
-
 	sw->config.enabled = 1;
 
 	/* upload configuration */
-	ret = tb_sw_write(sw, 1 + (u32 *) &sw->config, TB_CFG_SWITCH, 1, 3);
+	ret = tb_sw_write(sw, 1 + (u32 *)&sw->config, TB_CFG_SWITCH, 1, 3);
 	if (ret)
 		return ret;
 
@@ -1176,21 +1200,24 @@ static void tb_switch_set_uuid(struct tb_switch *sw)
 		return;
 
 	/*
-	 * By default the UUID will be based on UID where upper two
-	 * dwords are filled with ones.
-	 */
-	uuid[0] = sw->uid & 0xffffffff;
-	uuid[1] = (sw->uid >> 32) & 0xffffffff;
-	uuid[2] = 0xffffffff;
-	uuid[3] = 0xffffffff;
-
-	/*
 	 * The newer controllers include fused UUID as part of link
 	 * controller specific registers
 	 */
-	cap = tb_switch_find_vsec_cap(sw, TB_VSEC_CAP_LINK_CONTROLLER);
-	if (cap > 0)
+	cap = tb_switch_find_vse_cap(sw, TB_VSE_CAP_LINK_CONTROLLER);
+	if (cap > 0) {
 		tb_sw_read(sw, uuid, TB_CFG_SWITCH, cap + 3, 4);
+	} else {
+		/*
+		 * ICM generates UUID based on UID and fills the upper
+		 * two words with ones. This is not strictly following
+		 * UUID format but we want to be compatible with it so
+		 * we do the same here.
+		 */
+		uuid[0] = sw->uid & 0xffffffff;
+		uuid[1] = (sw->uid >> 32) & 0xffffffff;
+		uuid[2] = 0xffffffff;
+		uuid[3] = 0xffffffff;
+	}
 
 	sw->uuid = kmemdup(uuid, sizeof(uuid), GFP_KERNEL);
 }
@@ -1299,19 +1326,17 @@ int tb_switch_add(struct tb_switch *sw)
 			if (ret)
 				return ret;
 		}
-
-		if (sw->security_level == TB_SECURITY_SECURE)
-			sw->dev.groups = secure_switch_groups;
-		else
-			sw->dev.groups = switch_groups;
 	}
 
 	ret = device_add(&sw->dev);
 	if (ret)
 		return ret;
 
-	tb_switch_nvm_add(sw);
-	return 0;
+	ret = tb_switch_nvm_add(sw);
+	if (ret)
+		device_del(&sw->dev);
+
+	return ret;
 }
 
 /**
@@ -1366,19 +1391,26 @@ void tb_sw_set_unplugged(struct tb_switch *sw)
 int tb_switch_resume(struct tb_switch *sw)
 {
 	int i, err;
-	u64 uid;
 	tb_sw_info(sw, "resuming switch\n");
 
-	err = tb_drom_read_uid_only(sw, &uid);
-	if (err) {
-		tb_sw_warn(sw, "uid read failed\n");
-		return err;
-	}
-	if (sw != sw->tb->root_switch && sw->uid != uid) {
-		tb_sw_info(sw,
-			"changed while suspended (uid %#llx -> %#llx)\n",
-			sw->uid, uid);
-		return -ENODEV;
+	/*
+	 * Check for UID of the connected switches except for root
+	 * switch which we assume cannot be removed.
+	 */
+	if (tb_route(sw)) {
+		u64 uid;
+
+		err = tb_drom_read_uid_only(sw, &uid);
+		if (err) {
+			tb_sw_warn(sw, "uid read failed\n");
+			return err;
+		}
+		if (sw->uid != uid) {
+			tb_sw_info(sw,
+				"changed while suspended (uid %#llx -> %#llx)\n",
+				sw->uid, uid);
+			return -ENODEV;
+		}
 	}
 
 	/* upload configuration */
@@ -1499,4 +1531,9 @@ struct tb_switch *tb_switch_find_by_uuid(struct tb *tb, const uuid_be *uuid)
 		return tb_to_switch(dev);
 
 	return NULL;
+}
+
+void tb_switch_exit(void)
+{
+	ida_destroy(&nvm_ida);
 }

@@ -27,7 +27,7 @@ struct tb_ctl {
 
 	struct dma_pool *frame_pool;
 	struct ctl_pkg *rx_packets[TB_CTL_RX_PKG_COUNT];
-	struct mutex request_lock;
+	struct mutex request_queue_lock;
 	struct list_head request_queue;
 	bool running;
 
@@ -52,6 +52,8 @@ struct tb_ctl {
 	dev_dbg(&(ctl)->nhi->pdev->dev, format, ## arg)
 
 static DECLARE_WAIT_QUEUE_HEAD(tb_cfg_request_cancel_queue);
+/* Serializes access to request kref_get/put */
+static DEFINE_MUTEX(tb_cfg_request_lock);
 
 /**
  * tb_cfg_request_alloc() - Allocates a new config request
@@ -78,7 +80,9 @@ struct tb_cfg_request *tb_cfg_request_alloc(void)
  */
 void tb_cfg_request_get(struct tb_cfg_request *req)
 {
+	mutex_lock(&tb_cfg_request_lock);
 	kref_get(&req->kref);
+	mutex_unlock(&tb_cfg_request_lock);
 }
 
 static void tb_cfg_request_destroy(struct kref *kref)
@@ -97,7 +101,9 @@ static void tb_cfg_request_destroy(struct kref *kref)
  */
 void tb_cfg_request_put(struct tb_cfg_request *req)
 {
+	mutex_lock(&tb_cfg_request_lock);
 	kref_put(&req->kref, tb_cfg_request_destroy);
+	mutex_unlock(&tb_cfg_request_lock);
 }
 
 static int tb_cfg_request_enqueue(struct tb_ctl *ctl,
@@ -106,15 +112,15 @@ static int tb_cfg_request_enqueue(struct tb_ctl *ctl,
 	WARN_ON(test_bit(TB_CFG_REQUEST_ACTIVE, &req->flags));
 	WARN_ON(req->ctl);
 
-	mutex_lock(&ctl->request_lock);
+	mutex_lock(&ctl->request_queue_lock);
 	if (!ctl->running) {
-		mutex_unlock(&ctl->request_lock);
+		mutex_unlock(&ctl->request_queue_lock);
 		return -ENOTCONN;
 	}
 	req->ctl = ctl;
 	list_add_tail(&req->list, &ctl->request_queue);
 	set_bit(TB_CFG_REQUEST_ACTIVE, &req->flags);
-	mutex_unlock(&ctl->request_lock);
+	mutex_unlock(&ctl->request_queue_lock);
 	return 0;
 }
 
@@ -122,12 +128,12 @@ static void tb_cfg_request_dequeue(struct tb_cfg_request *req)
 {
 	struct tb_ctl *ctl = req->ctl;
 
-	mutex_lock(&ctl->request_lock);
+	mutex_lock(&ctl->request_queue_lock);
 	list_del(&req->list);
 	clear_bit(TB_CFG_REQUEST_ACTIVE, &req->flags);
 	if (test_bit(TB_CFG_REQUEST_CANCELED, &req->flags))
 		wake_up(&tb_cfg_request_cancel_queue);
-	mutex_unlock(&ctl->request_lock);
+	mutex_unlock(&ctl->request_queue_lock);
 }
 
 static bool tb_cfg_request_is_active(struct tb_cfg_request *req)
@@ -141,7 +147,7 @@ tb_cfg_request_find(struct tb_ctl *ctl, struct ctl_pkg *pkg)
 	struct tb_cfg_request *req;
 	bool found = false;
 
-	mutex_lock(&pkg->ctl->request_lock);
+	mutex_lock(&pkg->ctl->request_queue_lock);
 	list_for_each_entry(req, &pkg->ctl->request_queue, list) {
 		tb_cfg_request_get(req);
 		if (req->match(req, pkg)) {
@@ -150,7 +156,7 @@ tb_cfg_request_find(struct tb_ctl *ctl, struct ctl_pkg *pkg)
 		}
 		tb_cfg_request_put(req);
 	}
-	mutex_unlock(&pkg->ctl->request_lock);
+	mutex_unlock(&pkg->ctl->request_queue_lock);
 
 	return found ? req : NULL;
 }
@@ -612,7 +618,7 @@ struct tb_ctl *tb_ctl_alloc(struct tb_nhi *nhi, event_cb cb, void *cb_data)
 	ctl->callback = cb;
 	ctl->callback_data = cb_data;
 
-	mutex_init(&ctl->request_lock);
+	mutex_init(&ctl->request_queue_lock);
 	INIT_LIST_HEAD(&ctl->request_queue);
 	ctl->frame_pool = dma_pool_create("thunderbolt_ctl", &nhi->pdev->dev,
 					 TB_FRAME_SIZE, 4, 0);
@@ -651,6 +657,10 @@ err:
 void tb_ctl_free(struct tb_ctl *ctl)
 {
 	int i;
+
+	if (!ctl)
+		return;
+
 	if (ctl->rx)
 		ring_free(ctl->rx);
 	if (ctl->tx)
@@ -691,9 +701,9 @@ void tb_ctl_start(struct tb_ctl *ctl)
  */
 void tb_ctl_stop(struct tb_ctl *ctl)
 {
-	mutex_lock(&ctl->request_lock);
+	mutex_lock(&ctl->request_queue_lock);
 	ctl->running = false;
-	mutex_unlock(&ctl->request_lock);
+	mutex_unlock(&ctl->request_queue_lock);
 
 	ring_stop(ctl->rx);
 	ring_stop(ctl->tx);

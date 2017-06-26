@@ -58,11 +58,10 @@ static void tb_domain_release(struct device *dev)
 {
 	struct tb *tb = container_of(dev, struct tb, dev);
 
-	if (tb->ctl)
-		tb_ctl_free(tb->ctl);
-
+	tb_ctl_free(tb->ctl);
 	destroy_workqueue(tb->wq);
 	ida_simple_remove(&tb_domain_ida, tb->index);
+	mutex_destroy(&tb->lock);
 	kfree(tb);
 }
 
@@ -452,4 +451,6 @@ int tb_domain_init(void)
 void tb_domain_exit(void)
 {
 	bus_unregister(&tb_bus_type);
+	ida_destroy(&tb_domain_ida);
+	tb_switch_exit();
 }

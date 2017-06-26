@@ -45,15 +45,6 @@
 #define ICM_MAX_LINK			4
 #define ICM_MAX_DEPTH			6
 
-/* Each physical port contains 2 links on modern controllers */
-#define TB_LINKS_PER_PHYS_PORT		2
-
-/*
- * Calculate physical port number (Zero-based numbering) from link which
- * starts from 1.
- */
-#define TB_PHYS_PORT_FROM_LINK(link)	(((link) - 1) / TB_LINKS_PER_PHYS_PORT)
-
 /**
  * struct icm - Internal connection manager private data
  * @request_lock: Makes sure only one message is send to ICM at time
@@ -96,9 +87,9 @@ static inline struct tb *icm_to_tb(struct icm *icm)
 	return ((void *)icm - sizeof(struct tb));
 }
 
-static inline u8 phys_port_from_route(u64 route, u8 depth)
+static inline u8 phy_port_from_route(u64 route, u8 depth)
 {
-	return TB_PHYS_PORT_FROM_LINK(route >> ((depth - 1) * 8));
+	return tb_switch_phy_port_from_link(route >> ((depth - 1) * 8));
 }
 
 static inline u8 dual_link_from_link(u8 link)
@@ -369,11 +360,11 @@ icm_fr_device_connected(struct tb *tb, const struct icm_pkg_header *hdr)
 
 	sw = tb_switch_find_by_uuid(tb, &pkg->ep_uuid);
 	if (sw) {
-		u8 phys_port, sw_phys_port;
+		u8 phy_port, sw_phy_port;
 
 		parent_sw = tb_to_switch(sw->dev.parent);
-		sw_phys_port = phys_port_from_route(tb_route(sw), sw->depth);
-		phys_port = phys_port_from_route(route, depth);
+		sw_phy_port = phy_port_from_route(tb_route(sw), sw->depth);
+		phy_port = phy_port_from_route(route, depth);
 
 		/*
 		 * On resume ICM will send us connected events for the
@@ -383,7 +374,7 @@ icm_fr_device_connected(struct tb *tb, const struct icm_pkg_header *hdr)
 		 * have been enumerated using the other link now. Make
 		 * sure our book keeping matches that.
 		 */
-		if (sw->depth == depth && sw_phys_port == phys_port &&
+		if (sw->depth == depth && sw_phy_port == phy_port &&
 		    !!sw->authorized == authorized) {
 			tb_port_at(tb_route(sw), parent_sw)->remote = NULL;
 			tb_port_at(route, parent_sw)->remote =
@@ -779,7 +770,7 @@ static int icm_firmware_start(struct tb *tb, struct tb_nhi *nhi)
 	return -ETIMEDOUT;
 }
 
-static int icm_reset_phys_port(struct tb *tb, int phys_port)
+static int icm_reset_phy_port(struct tb *tb, int phy_port)
 {
 	struct icm *icm = tb_priv(tb);
 	u32 state0, state1;
@@ -790,7 +781,7 @@ static int icm_reset_phys_port(struct tb *tb, int phys_port)
 	if (!icm->upstream_port)
 		return 0;
 
-	if (phys_port) {
+	if (phy_port) {
 		port0 = 3;
 		port1 = 4;
 	} else {
@@ -882,10 +873,10 @@ static int icm_firmware_init(struct tb *tb)
 	 * Reset both physical ports if there is anything connected to
 	 * them already.
 	 */
-	ret = icm_reset_phys_port(tb, 0);
+	ret = icm_reset_phy_port(tb, 0);
 	if (ret)
 		dev_warn(&nhi->pdev->dev, "failed to reset links on port0\n");
-	ret = icm_reset_phys_port(tb, 1);
+	ret = icm_reset_phy_port(tb, 1);
 	if (ret)
 		dev_warn(&nhi->pdev->dev, "failed to reset links on port1\n");
 

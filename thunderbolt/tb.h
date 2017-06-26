@@ -53,7 +53,9 @@ enum tb_security_level {
 	TB_SECURITY_DPONLY,
 };
 
-#define TB_SWITCH_KEY_SIZE	32
+#define TB_SWITCH_KEY_SIZE		32
+/* Each physical port contains 2 links on modern controllers */
+#define TB_SWITCH_LINKS_PER_PHY_PORT	2
 
 /**
  * struct tb_switch - a thunderbolt switch
@@ -61,8 +63,9 @@ enum tb_security_level {
  * @config: Switch configuration
  * @ports: Ports in this switch
  * @dma_port: If the switch has port supporting DMA configuration based
- *	      mailbox this will hold the pointer to that. Otherwise
- *	      will be set to %NULL.
+ *	      mailbox this will hold the pointer to that (%NULL
+ *	      otherwise). If set it also means the switch has
+ *	      upgradeable NVM.
  * @tb: Pointer to the domain the switch belongs to
  * @uid: Unique ID of the switch
  * @uuid: UUID of the switch (or %NULL if not supported)
@@ -371,6 +374,7 @@ extern struct device_type tb_switch_type;
 
 int tb_domain_init(void);
 void tb_domain_exit(void);
+void tb_switch_exit(void);
 
 struct tb *tb_domain_alloc(struct tb_nhi *nhi, size_t privsize);
 int tb_domain_add(struct tb *tb);
@@ -405,6 +409,11 @@ struct tb_switch *tb_switch_find_by_link_depth(struct tb *tb, u8 link,
 					       u8 depth);
 struct tb_switch *tb_switch_find_by_uuid(struct tb *tb, const uuid_be *uuid);
 
+static inline unsigned int tb_switch_phy_port_from_link(unsigned int link)
+{
+	return (link - 1) / TB_SWITCH_LINKS_PER_PHY_PORT;
+}
+
 static inline void tb_switch_put(struct tb_switch *sw)
 {
 	put_device(&sw->dev);
@@ -426,7 +435,7 @@ int tb_wait_for_port(struct tb_port *port, bool wait_if_unplugged);
 int tb_port_add_nfc_credits(struct tb_port *port, int credits);
 int tb_port_clear_counter(struct tb_port *port, int counter);
 
-int tb_switch_find_vsec_cap(struct tb_switch *sw, enum tb_switch_vsec_cap vsec);
+int tb_switch_find_vse_cap(struct tb_switch *sw, enum tb_switch_vse_cap vsec);
 int tb_port_find_cap(struct tb_port *port, enum tb_port_cap cap);
 
 struct tb_path *tb_path_alloc(struct tb *tb, int num_hops);

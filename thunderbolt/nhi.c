@@ -50,6 +50,37 @@ static void ring_interrupt_active(struct tb_ring *ring, bool active)
 	int bit = ring_interrupt_index(ring) & 31;
 	int mask = 1 << bit;
 	u32 old, new;
+
+	if (ring->irq > 0) {
+		u32 step, shift, ivr, misc;
+		void __iomem *ivr_base;
+		int index;
+
+		if (ring->is_tx)
+			index = ring->hop;
+		else
+			index = ring->hop + ring->nhi->hop_count;
+
+		/*
+		 * Ask the hardware to clear interrupt status bits automatically
+		 * since we already know which interrupt was triggered.
+		 */
+		misc = ioread32(ring->nhi->iobase + REG_DMA_MISC);
+		if (!(misc & REG_DMA_MISC_INT_AUTO_CLEAR)) {
+			misc |= REG_DMA_MISC_INT_AUTO_CLEAR;
+			iowrite32(misc, ring->nhi->iobase + REG_DMA_MISC);
+		}
+
+		ivr_base = ring->nhi->iobase + REG_INT_VEC_ALLOC_BASE;
+		step = index / REG_INT_VEC_ALLOC_REGS * REG_INT_VEC_ALLOC_BITS;
+		shift = index % REG_INT_VEC_ALLOC_REGS * REG_INT_VEC_ALLOC_BITS;
+		ivr = ioread32(ivr_base + step);
+		ivr &= ~(REG_INT_VEC_ALLOC_MASK << shift);
+		if (active)
+			ivr |= ring->vector << shift;
+		iowrite32(ivr, ivr_base + step);
+	}
+
 	old = ioread32(ring->nhi->iobase + reg);
 	if (active)
 		new = old | mask;
@@ -255,38 +286,6 @@ static irqreturn_t ring_msix(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static void ring_map_unmap_msix(struct tb_ring *ring, bool map)
-{
-	u32 step, shift, ivr, misc;
-	int index;
-
-	if (ring->irq <= 0)
-		return;
-
-	if (ring->is_tx)
-		index = ring->hop;
-	else
-		index = ring->hop + ring->nhi->hop_count;
-
-	/*
-	 * Ask the hardware to clear interrupt status bits automatically
-	 * since we already know which interrupt was triggered.
-	 */
-	misc = ioread32(ring->nhi->iobase + REG_DMA_MISC);
-	if (!(misc & REG_DMA_MISC_INT_AUTO_CLEAR)) {
-		misc |= REG_DMA_MISC_INT_AUTO_CLEAR;
-		iowrite32(misc, ring->nhi->iobase + REG_DMA_MISC);
-	}
-
-	step = index / REG_INT_VEC_ALLOC_REGS * REG_INT_VEC_ALLOC_BITS;
-	shift = index % REG_INT_VEC_ALLOC_REGS * REG_INT_VEC_ALLOC_BITS;
-	ivr = ioread32(ring->nhi->iobase + REG_INT_VEC_ALLOC_BASE + step);
-	ivr &= ~(REG_INT_VEC_ALLOC_MASK << shift);
-	if (map)
-		ivr |= ring->vector << shift;
-	iowrite32(ivr, ring->nhi->iobase + REG_INT_VEC_ALLOC_BASE + step);
-}
-
 static int ring_request_msix(struct tb_ring *ring, bool no_suspend)
 {
 	struct tb_nhi *nhi = ring->nhi;
@@ -425,7 +424,6 @@ void ring_start(struct tb_ring *ring)
 		ring_iowrite32options(ring,
 				      RING_FLAG_ENABLE | RING_FLAG_RAW, 0);
 	}
-	ring_map_unmap_msix(ring, true);
 	ring_interrupt_active(ring, true);
 	ring->running = true;
 err:
@@ -460,7 +458,6 @@ void ring_stop(struct tb_ring *ring)
 		goto err;
 	}
 	ring_interrupt_active(ring, false);
-	ring_map_unmap_msix(ring, false);
 
 	ring_iowrite32options(ring, 0, 0);
 	ring_iowrite64desc(ring, 0, 0);
@@ -525,9 +522,9 @@ void ring_free(struct tb_ring *ring)
 
 	mutex_unlock(&ring->nhi->lock);
 	/**
-	 * ring->work can no longer be scheduled (it is scheduled only by
-	 * nhi_interrupt_work and ring_stop). Wait for it to finish before
-	 * freeing the ring.
+	 * ring->work can no longer be scheduled (it is scheduled only
+	 * by nhi_interrupt_work, ring_stop and ring_msix). Wait for it
+	 * to finish before freeing the ring.
 	 */
 	flush_work(&ring->work);
 	mutex_destroy(&ring->lock);
@@ -658,15 +655,13 @@ static int nhi_resume_noirq(struct device *dev)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
 	struct tb *tb = pci_get_drvdata(pdev);
-	u32 vid;
 
 	/*
 	 * Check that the device is still there. It may be that the user
 	 * unplugged last device which causes the host controller to go
 	 * away on PCs.
 	 */
-	pci_read_config_dword(pdev, PCI_VENDOR_ID, &vid);
-	if (vid == ~0)
+	if (!pci_device_is_present(pdev))
 		tb->nhi->going_away = true;
 
 	return tb_domain_resume_noirq(tb);
@@ -706,9 +701,10 @@ static void nhi_shutdown(struct tb_nhi *nhi)
 	 * We have to release the irq before calling flush_work. Otherwise an
 	 * already executing IRQ handler could call schedule_work again.
 	 */
-	if (!nhi->pdev->msix_enabled)
+	if (!nhi->pdev->msix_enabled) {
 		devm_free_irq(&nhi->pdev->dev, nhi->pdev->irq, nhi);
-	flush_work(&nhi->interrupt_work);
+		flush_work(&nhi->interrupt_work);
+	}
 	mutex_destroy(&nhi->lock);
 	ida_destroy(&nhi->msix_ida);
 }

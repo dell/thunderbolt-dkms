@@ -10,7 +10,7 @@
 #include "tb.h"
 
 #define CAP_OFFSET_MAX		0xff
-#define VSEC_CAP_OFFSET_MAX	0xffff
+#define VSE_CAP_OFFSET_MAX	0xffff
 
 struct tb_cap_any {
 	union {
@@ -82,25 +82,25 @@ static int tb_switch_find_cap(struct tb_switch *sw, enum tb_switch_cap cap)
 }
 
 /**
- * tb_switch_find_vsec_cap() - Find switch vendor specific capability
+ * tb_switch_find_vse_cap() - Find switch vendor specific capability
  * @sw: Switch to find the capability for
  * @vsec: Vendor specific capability to look
  *
- * Functions enumerates vendor specific (VSEC) capabilities of a switch
- * and returns offset when capability matching @vsed is found. If no
+ * Functions enumerates vendor specific capabilities (VSEC) of a switch
+ * and returns offset when capability matching @vsec is found. If no
  * such capability is found returns %-ENOENT. In case of error returns
  * negative errno.
  */
-int tb_switch_find_vsec_cap(struct tb_switch *sw, enum tb_switch_vsec_cap vsec)
+int tb_switch_find_vse_cap(struct tb_switch *sw, enum tb_switch_vse_cap vsec)
 {
 	struct tb_cap_any header;
 	int offset;
 
-	offset = tb_switch_find_cap(sw, TB_SWITCH_CAP_VSEC);
+	offset = tb_switch_find_cap(sw, TB_SWITCH_CAP_VSE);
 	if (offset < 0)
 		return offset;
 
-	while (offset > 0 && offset < VSEC_CAP_OFFSET_MAX) {
+	while (offset > 0 && offset < VSE_CAP_OFFSET_MAX) {
 		int ret;
 
 		ret = tb_sw_read(sw, &header, TB_CFG_SWITCH, offset, 2);
