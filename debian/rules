@@ -4,8 +4,8 @@
 # Uncomment this to turn on verbose mode.
 #export DH_VERBOSE=1
 
-DEB_NAME=thunderbolt-icm
-NAME=thunderbolt-icm
+DEB_NAME=thunderbolt
+NAME=thunderbolt
 VERSION=0.2
 
 configure: configure-stamp

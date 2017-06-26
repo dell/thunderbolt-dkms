@@ -1,6 +1,6 @@
 #!/bin/sh
 
-NAME=thunderbolt-icm
+NAME=thunderbolt
 VERSION=0.2
 
 set -e

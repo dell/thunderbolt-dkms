@@ -15,5 +15,5 @@ while [ -z "$MSG" ]; do
 done
 
 sed -i "s/^VERSION=.*/VERSION=$VER/" debian/rules debian/prerm
-sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"$VER\"/" thunderbolt-icm/dkms.conf
+sed -i "s/^PACKAGE_VERSION=.*/PACKAGE_VERSION=\"$VER\"/" thunderbolt/dkms.conf
 dch -v "$VER" "$MSG"
