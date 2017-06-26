@@ -10,3 +10,14 @@ before_script:
 
 script:
   - docker run -e -t -v `pwd`:/build thunderbolt-dkms-ubuntu ./ci/build_and_install_debs.sh
+
+deploy:
+  provider: releases
+  api_key:
+    secure: "jCwSWKp9ae7FjNRE+uEDNceBdUdKumGrBdoDSriXAVgduo20PpKKxLc9Wpv8SjtqVWJ30X75PJpolMcDUHmLlDpuA8jPXdlrvQCM92prgAJvHDJ79hKtuzNC1sSqi/wKkJmIxYUm0o7flWcT11IFCTtbK4X/qxyfCWf+gOmalbR9SliEbwE/Usv21ewVKuudL621DiKIpiiN0YUqToHBVNryuExDHzCuR9j/NL/qFcAMLnUlaq88GRcpH6gionvaXJ4efJdLjMUUTMXUsDBw2Xe52oJvB2F3k0CLjXOIjp4caKGAGIMyprck/rYjNdK+ZL5g717n3GLWrboarft9RmvOUBnz+qZxE81dOUcMfcjPeqUNSZCMqAGdsnRo217LbTrZ3oBORyb/5XDtN3w+i2cReBfbAxezc/gysQKSsuIy+72qfOW5I/m+pFPE+5gS6huIQUu1yZsSP1eoea8lkiK4pmHf96QPF5LwsJ8r6iWlwtj6ySkucxeQfJAfeIyNjX0rRO1v2aZr2RXAzAmzYHN/07Aok5D9kNmC6MDCvHHyPRDuXcLFdCYN9oSeRLpih+8u/2CIr4ouuifY4o078OXimAq2CqWuQZl9aK5djZLpgds/bJqI78uW2gxOnMZVIWH3MXIX0ZTIBM6uEWEW1rKwTgWQjEejX/4Il4DlsOs="
+  file_glob: true
+  file: build/*.deb
+  skip_cleanup: true
+  on:
+    tags: true
+    branch: master
