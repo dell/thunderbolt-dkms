@@ -6,7 +6,7 @@
 
 DEB_NAME=thunderbolt
 NAME=thunderbolt
-VERSION=0.2
+VERSION=0.3
 
 configure: configure-stamp
 configure-stamp:

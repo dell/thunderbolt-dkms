@@ -1,3 +1,9 @@
+thunderbolt-dkms (0.3) UNRELEASED; urgency=medium
+
+  * Update version number to represent all these changes
+
+ -- Mario Limonciello <mario.limonciello@dell.com>  Mon, 26 Jun 2017 17:23:25 -0500
+
 thunderbolt-dkms (0.2) xenial; urgency=medium
 
   * new release of tbt driver
