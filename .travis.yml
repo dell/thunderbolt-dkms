@@ -1,0 +1,12 @@
+language: c
+sudo: required
+dist: trusty
+
+services:
+  - docker
+
+before_script:
+  - docker build -t thunderbolt-dkms-ubuntu -f ci/Dockerfile-ubuntu-artful .
+
+script:
+  - docker run -e -t -v `pwd`:/build thunderbolt-dkms-ubuntu ./ci/build_and_install_debs.sh

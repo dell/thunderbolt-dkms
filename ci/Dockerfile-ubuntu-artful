@@ -1,0 +1,12 @@
+FROM ubuntu:artful
+
+RUN apt-get update -qq
+RUN apt-get install -yq --no-install-recommends \
+	debhelper \
+	dkms \
+	dh-modaliases \
+	git \
+	devscripts \
+	build-essential
+RUN mkdir /build
+WORKDIR /build
