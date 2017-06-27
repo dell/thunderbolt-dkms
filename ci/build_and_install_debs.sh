@@ -15,5 +15,3 @@ dpkg-buildpackage
 
 #test the packages install
 dpkg -i ../*.deb
-
-dkms mkrpm -m thunderbolt -v $VERSION
