@@ -13,6 +13,11 @@
 
 #include "tb.h"
 
+#include <linux/version.h>
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4, 6, 0)
+#include "extra_pci_ids.h"
+#endif
+
 /* Switch authorization from userspace is serialized by this lock */
 static DEFINE_MUTEX(switch_lock);
 

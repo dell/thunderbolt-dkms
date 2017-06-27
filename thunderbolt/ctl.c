@@ -13,6 +13,10 @@
 
 #include "ctl.h"
 
+#include <linux/version.h>
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4, 11, 0)
+#include <linux/sched.h>
+#endif
 
 #define TB_CTL_RX_PKG_COUNT	10
 #define TB_CTL_RETRIES		4

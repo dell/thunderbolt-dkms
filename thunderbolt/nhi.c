@@ -19,6 +19,15 @@
 #include "nhi_regs.h"
 #include "tb.h"
 
+#include <linux/version.h>
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4, 6, 0)
+#include "extra_pci_ids.h"
+#endif
+
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4, 9, 0)
+#include "pci_vectors.h"
+#endif
+
 #define RING_TYPE(ring) ((ring)->is_tx ? "TX ring" : "RX ring")
 
 /*

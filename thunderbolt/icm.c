@@ -24,6 +24,11 @@
 #include "nhi_regs.h"
 #include "tb.h"
 
+#include <linux/version.h>
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4, 6, 0)
+#include "extra_pci_ids.h"
+#endif
+
 #define PCIE2CIO_CMD			0x30
 #define PCIE2CIO_CMD_TIMEOUT		BIT(31)
 #define PCIE2CIO_CMD_START		BIT(30)
