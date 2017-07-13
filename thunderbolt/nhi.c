@@ -24,7 +24,7 @@
 #include "extra_pci_ids.h"
 #endif
 
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(4, 9, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0)
 #include "pci_vectors.h"
 #endif
 

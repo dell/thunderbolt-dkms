@@ -3,7 +3,7 @@
  * only use it when on 4.8 or less
  */
 #include <linux/version.h>
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(4, 9, 0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0)
 
 /**
  * pci_alloc_irq_vectors - allocate multiple IRQs for a device
